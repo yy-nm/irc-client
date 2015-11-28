@@ -17,6 +17,8 @@
 #define MAX_CLIENT_SEND_BUFF_SZ 4096
 #define IRC_SERVER_URL "weber.freenode.net"
 #define IRC_SERVER_PORT 6667
+#define MIN(x, y) (x) > (y) ? (y) : (x)
+#define MAX(x, y) (x) > (y) ? (x) : (y)
 
 typedef struct node {
 	struct node *next;
@@ -87,13 +89,28 @@ void irc_channel_send_msg(irc_data_t *data,const char *msg, int len)
 {
 	char *msg_end = "\r\n";
 	node_t *n = (node_t *) malloc(sizeof(node_t));
-	n->v = malloc(len + strlen(msg_end));
+	n->v = malloc(len + strlen(msg_end) + 1);
 	memcpy(n->v, msg, len);
 	memcpy(n->v + len, msg_end, strlen(msg_end));
+	((char *)n->v)[len + strlen(msg_end)] = '\0';
 	pthread_mutex_lock(&data->list_lock);
 	n->next = data->list.next;
 	data->list.next = n;
 	pthread_mutex_unlock(&data->list_lock);
+}
+
+node_t * irc_channel_get_msg(irc_data_t *data)
+{
+	if (NULL == data)
+		return NULL;
+	pthread_mutex_lock(&data->list_lock);
+	node_t *n = data->list.next;
+	if (NULL != n)
+		data->list.next = n->next;
+	else
+		data->list.next = NULL;
+	pthread_mutex_unlock(&data->list_lock);
+	return n;
 }
 
 /*
@@ -112,13 +129,137 @@ void handle_msg_remove_illegal_ch(char *msg, int len)
 	}
 }
 
-enum {
-	IRC_COMMAND_NICK = 0,
+typedef struct custom_command {
+	const char cmd_shortcut;
+	const char * const cmd_name;
+	const char * const irc_cmd_name;
+	int cmd_params_count;
+	const char * const cmd_comment;
+} custom_command_t;
 
+static custom_command_t *IRC_COMMAND = {
+	{ 'n', "name",		"NICK",		1,	"set nickname"},
+	{ 'l', "login",		"USER",		1,	"login"},
+	{ 'j', "join",		"JOIN",		1,	"join channel"},
+	{ 'L', "leave",		"PART",		1,	"leave channel"},
+	{ 'q', "quit",		"QUIT",		0,	"quit from irc"},
+	{ 'N', "namelist",	"NAMES",	0,	"list name from channel"},
+	{ 'c', "channel",	"LIST",		0,	"list channel or topic"},
+	{ 'i', "invite",	"INVITE",	2,	"invite other to channel"}, 
+	{ 'k', "kickout",	"KICK",		2,	"kick other out of channel"},
+	{ 'm', "message",	"PRIVMSG",	1,	"send msg in cur channel"},
+	{ 'M', "custom-msg",	"PRIVMSG",	2,	"send msg to other channel"},
+	{ 'p', "person-talk",	"PRIVMSG",	2,	"talk to other user"},
+	{ 'w', "who",		"WHO",		0,	"search user"},
+	{ 'W', "whois",		"WHOIS",	1,	"search user info"},
+	NULL
 };
-char **IRC_COMMAND = {
-	"NICK",
-};
+
+void print_usage()
+{
+	fprintf(stdout, "Command Usage:\n");
+	custom_command_t *cmd = IRC_COMMAND;
+	while (cmd) {
+		fprintf(stdout, "cmd: %c, %s \t\t\t%s\n"
+				, cmd->cmd_shortcut ? cmd->cmd_shortcut : ' '
+				, cmd->cmd_name, cmd->cmd_comment);
+	}
+	fprintf(stdout, "\n");
+}
+
+void handle_custom_client_command(irc_data_t *data, char *buf, int len)
+{
+	if (len < 2) {
+		fprintf(stderr, "error command!\n");
+		print_usage();
+		return;
+	}
+
+	int max_sz = MAX_CLIENT_SEND_BUFF_SZ - 1;
+	char msg_buf[MAX_CLIENT_SEND_BUFF_SZ];
+	int cur = 0;
+	char *p = NULL;
+	custom_command_t *cmd = IRC_COMMAND;
+	while(NULL != cmd) {
+		p = buf + 1;
+		if (cmd->cmd_shortcut == *p && len >= 3 
+				&& '\0' == *(p + 1)) {
+			p++;
+			break;
+			
+		}
+		else if (cmd->cmd_shortcut == *p && len >= 3 
+				&& ' ' == *(p + 1)) {
+			p++;
+			break;
+		}
+		else if (len >= 1 + strlen(cmd->cmd_name)
+					&& 0 == strncmp(p, cmd->cmd_name
+						, strlen(cmd->cmd_name))) {
+			p += strlen(cmd->cmd_name);
+			if ('\0' == *p) {
+				break;
+			} else if (' ' == *p) {
+				/*p++;*/
+				break;
+			}
+		}
+	}
+	
+	if (!cmd)
+		return;
+	int params_count = cmd->cmd_params_count;
+	char *params_p = p;
+	while (params_count) {
+		if (p - buf + 1 >= len)
+			break;
+		p = strchr(p, ' ');
+		if (!p)
+			break;
+		p++;
+		params_count --;
+	}
+	
+	if (params_count) {
+usage:
+		fprintf(stderr, "cmd: %c, %s need %d args"
+				, cmd->cmd_shortcut ? cmd->cmd_shortcut : ' '
+				, cmd->cmd_name, cmd->cmd_params_count);
+		return;
+	}
+	p = params_p;
+	if (' ' == *p)
+		p++;
+
+	if (0 == strcmp("name", cmd->cmd_name)) {
+		if (data->nickname && 2 + strlen(data->nickname) + cur < max_sz)
+		{
+			cur += sprintf(msg_buf + cur, ":%s ", data->nickname);
+		}
+		
+		char *nickname = data->nickname;
+		data->nickname = NULL;
+		if (nickname)
+			free(nickname);
+		nickname = (char *)malloc(strlen(p) + 1);
+		strcpy(nickname, p);
+		nickname[strlen(p)] = '\0';
+		data->nickname = nickname;
+	} else if (0 == strcmp("login", cmd->cmd_name)) {
+	}
+
+	if (strlen(cmd->irc_cmd_name) + 1 + strlen(p) < max_sz) {
+		cur += sprintf(msg_buf + cur, "%s %s", cmd->irc_cmd_name
+				, p);
+	} else
+	{
+		goto usage;
+	}
+
+	irc_channel_send_msg(data, msg_buf, cur);
+
+}
+
 
 /*
  * handle msg from client
@@ -127,48 +268,12 @@ void handle_msg_from_client(irc_data_t *data, char *buf, int len)
 {
 	if (NULL == buf || 0 == len)
 		return;
-	if ('/' != buf[0] || 1 == len) {
+	if ('/' != buf[0]) {
+		printf("send msg to list\n");
 		irc_channel_send_msg(data, buf, len);
 		return;
-	}
-	int msg_len = MAX_CLIENT_SEND_BUFF_SZ;
-	char msg[MAX_CLIENT_SEND_BUFF_SZ];
-	int cur = 0;
-	char *template = NULL;
-	switch (buf[1]) {
-	case 'n': /* nickname */
-		{
-			char *new_name = strchr(buf, ' ');
-			if (NULL == new_name) {
-				fprintf(stderr, "input new nickname");
-				return;
-			}
-			if (NULL != data->nickname) {
-				template = ":%s %s %s";
-				cur += snprintf(msg, msg_len - cur
-						, template, data->nickname
-					, IRC_COMMAND[IRC_COMMAND_NICK]
-					, new_name);
-			}
-			else {
-				template = "%s %s";
-				cur += snprintf(msg, msg_len - cur
-						, template
-						,IRC_COMMAND[IRC_COMMAND_NICK]
-					, new_name);
-			}
-		}
-		break;
-	}
-
-	if (cur + 1 > len)
-	{
-		fprintf(stderr, "send message can not bigger than %d\n", len);
-		return;
-	}
-	else
-	{
-		irc_channel_send_msg(data, msg, cur);
+	} else if('/' == buf[0]) {
+		handle_custom_client_command(data, buf, len);
 	}
 }
 
@@ -181,18 +286,14 @@ void * thread_send_msg_to_server(void *args)
 	timespan.tv_nsec = 1000 * 1000 * 100; /* 100 毫秒*/
 	int timecount = 0; // 超过 1s 不发数据就需要发送 ping 包
 	const int time_limit = 200;
-	const char const *msg_ping = "PING :ALIVECHECK\r\n";
+	const char * const msg_ping = "PING :ALIVECHECK\r\n";
 
 	int len = 0;
 	int send_count = 0;
 	int ret = 0;
 	for (;;) {
-		pthread_mutex_lock(&data->list_lock);
-		if (NULL != data->list.next) {
-			n = data->list.next;
-			data->list.next = n->next;
-		}
-		pthread_mutex_unlock(&data->list_lock);
+		n = irc_channel_get_msg(data);
+
 		if (NULL != n && NULL != n->v) {
 			len = strlen(n->v);
 			send_count = 0;
@@ -205,10 +306,11 @@ void * thread_send_msg_to_server(void *args)
 				}
 				send_count += ret;
 			}
-			int i = 0;
-			for (i = 0; i < len; ++i) {
-				fprintf(stdout, "0x%.2X", ((char*) n->v)[i]);
-			}
+			/*int i = 0;*/
+			/*for (i = 0; i < len; ++i) {*/
+				/*fprintf(stdout, "0x%.2X", ((char*) n->v)[i]);*/
+			/*}*/
+			/*fprintf(stdout, "\n");*/
 			free(n->v);
 			free(n);
 			if (len != send_count)
