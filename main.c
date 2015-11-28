@@ -10,11 +10,12 @@
 #include <pthread.h>
 #include <time.h>
 #include <sys/mman.h>
+#include <netdb.h>
 
 #define SOCK_PATH "IRC_Server"
 #define SOCK_MAX_CLIENT 10
 #define MAX_CLIENT_SEND_BUFF_SZ 4096
-#define IRC_SERVER_URL "chat.au.freenode.net"
+#define IRC_SERVER_URL "weber.freenode.net"
 #define IRC_SERVER_PORT 6667
 
 typedef struct node {
@@ -71,7 +72,8 @@ void irc_free(irc_data_t *data)
 	pthread_mutex_unlock(&data->list_lock);
 	pthread_mutex_destroy(&data->list_lock);
 
-	for (int i = 0; i < data->ch_cur_count; ++i) {
+	int i = 0;
+	for (i = 0; i < data->ch_cur_count; ++i) {
 		if (NULL != data->channel_names[i]) {
 			free(data->channel_names[i]);
 			data->channel_names[i] = NULL;
@@ -81,11 +83,13 @@ void irc_free(irc_data_t *data)
 
 }
 
-void irc_channel_send_msg(irc_data_t *data, char *msg, int len)
+void irc_channel_send_msg(irc_data_t *data,const char *msg, int len)
 {
+	char *msg_end = "\r\n";
 	node_t *n = (node_t *) malloc(sizeof(node_t));
-	n->v = malloc(len);
+	n->v = malloc(len + strlen(msg_end));
 	memcpy(n->v, msg, len);
+	memcpy(n->v + len, msg_end, strlen(msg_end));
 	pthread_mutex_lock(&data->list_lock);
 	n->next = data->list.next;
 	data->list.next = n;
@@ -97,7 +101,8 @@ void irc_channel_send_msg(irc_data_t *data, char *msg, int len)
  * */
 void handle_msg_remove_illegal_ch(char *msg, int len)
 {
-	for (int i = 0; i < len; i++) {
+	int i = 0;
+	for (i = 0; i < len; i++) {
 		switch (msg[i]) {
 		case '\n': 
 		case '\r':
@@ -122,19 +127,11 @@ void handle_msg_from_client(irc_data_t *data, char *buf, int len)
 {
 	if (NULL == buf || 0 == len)
 		return;
-	if (*ch_cur > *ch_cur_count)
-		return;
-	if (*ch_cur_count > *ch_total_count)
-		return;
 	if ('/' != buf[0] || 1 == len) {
-		if (*ch_cur > 0 && data[*ch_cur]) {
-			irc_channel_send_msg(data, buf, len);
-		} else {
-			fprintf(stderr, "error: no channel or "
-					"no channel select!");
-		}
+		irc_channel_send_msg(data, buf, len);
+		return;
 	}
-	int len = MAX_CLIENT_SEND_BUFF_SZ;
+	int msg_len = MAX_CLIENT_SEND_BUFF_SZ;
 	char msg[MAX_CLIENT_SEND_BUFF_SZ];
 	int cur = 0;
 	char *template = NULL;
@@ -148,13 +145,16 @@ void handle_msg_from_client(irc_data_t *data, char *buf, int len)
 			}
 			if (NULL != data->nickname) {
 				template = ":%s %s %s";
-				cur += snprintf(msg, len - cur, template, data->nickname
+				cur += snprintf(msg, msg_len - cur
+						, template, data->nickname
 					, IRC_COMMAND[IRC_COMMAND_NICK]
 					, new_name);
 			}
 			else {
 				template = "%s %s";
-				cur += snprintf(msg, len - cur, template, IRC_COMMAND[IRC_COMMAND_NICK]
+				cur += snprintf(msg, msg_len - cur
+						, template
+						,IRC_COMMAND[IRC_COMMAND_NICK]
 					, new_name);
 			}
 		}
@@ -172,13 +172,16 @@ void handle_msg_from_client(irc_data_t *data, char *buf, int len)
 	}
 }
 
-void * thread_recv_msg_from_server(void *args)
+void * thread_send_msg_to_server(void *args)
 {
 	irc_data_t *data = (irc_data_t *) args;
 	node_t *n = NULL;
 	struct timespec timespan;
 	timespan.tv_sec = 0;
-	timespan.tv_nsec = 1000 * 100; /* 100微秒 */
+	timespan.tv_nsec = 1000 * 1000 * 100; /* 100 毫秒*/
+	int timecount = 0; // 超过 1s 不发数据就需要发送 ping 包
+	const int time_limit = 200;
+	const char const *msg_ping = "PING :ALIVECHECK\r\n";
 
 	int len = 0;
 	int send_count = 0;
@@ -194,10 +197,17 @@ void * thread_recv_msg_from_server(void *args)
 			len = strlen(n->v);
 			send_count = 0;
 			while(len > send_count) {
-				ret = send(data->socket_fd, n->v + send_count, len - send_count);
-				if (-1 == ret)
+				ret = send(data->socket_fd, n->v + send_count
+						, len - send_count, 0);
+				if (-1 == ret) {
+					perror("send irc server error\n");
 					break;
+				}
 				send_count += ret;
+			}
+			int i = 0;
+			for (i = 0; i < len; ++i) {
+				fprintf(stdout, "0x%.2X", ((char*) n->v)[i]);
 			}
 			free(n->v);
 			free(n);
@@ -206,26 +216,36 @@ void * thread_recv_msg_from_server(void *args)
 				perror("send fail, send thread exit");
 				break;
 			}
+			printf("[local_client]: send msg success\n");
+			timecount = 0;
 		} else if (NULL != n && NULL == n->v) {
+			timecount ++;
 			free(n);
+		} else {
+			timecount ++;
+		}
+		if (timecount > time_limit) {
+			timecount = 0;
+			irc_channel_send_msg(data, msg_ping, strlen(msg_ping));
 		}
 		nanosleep(&timespan, NULL);
 		n = NULL;
+
 	}
 
 	pthread_exit(data);
 	return data;
 }
 
-void * thread_send_msg_to_server(void *args)
+void * thread_recv_msg_from_server(void *args)
 {
 	irc_data_t *data = (irc_data_t *) args;
 	int ret = 0;
 	int len = MAX_CLIENT_SEND_BUFF_SZ;
-	char *buf = (void *)mmap(NULL, len, PROT_READ | PROT_WRITE
+	char *buf = (char *)mmap(NULL, len, PROT_READ | PROT_WRITE
 		, MAP_PRIVATE | MAP_ANON, -1, len);
 	if (NULL == buf) {
-		goto err
+		goto err;
 	}
 	for (;;) {
 		ret = recv(data->socket_fd, buf, len, 0);
@@ -250,15 +270,45 @@ int create_client_socket(char *ip, short port)
 	server_addr.sin_addr.s_addr = inet_addr(ip);
 	server_addr.sin_port = htons(port);
 	int s_fd = socket(AF_INET, SOCK_STREAM, 0);
+	printf("socket success\n");
 	if (0 > s_fd) {
-		perror("socket error!\n")
+		perror("socket error!\n");
 		return -1;
 	}
-	if (-1 == connect(s_fd, &server_addr, sizeof(server_addr))) {
+	printf("connect start\n");
+	if (-1 == connect(s_fd, (struct sockaddr *)&server_addr
+				, sizeof(server_addr))) {
 		perror("connect error");
 		return -2;
 	}
+	fprintf(stdout, "connect to %s\n", ip);
 	return s_fd;
+}
+int get_ip_from_hostname(char *hostname, char *ip, int ip_len)
+{
+	// 128: ipv6 + :: <= 60 char
+	struct hostent *host = gethostbyname(hostname);
+	if (NULL == host) {
+		fprintf(stderr, "get ip from host error: %s\n", hostname);
+		return -1;
+	}
+	if (host->h_length < 1 || NULL == host->h_addr_list) {
+		fprintf(stderr, "the hostname don't have ip list: %s\n", hostname);
+		return -2;
+	}
+	if (strlen(host->h_addr_list[0]) > ip_len) {
+		perror("ip array too short!\n");
+		return -3;
+	}
+	struct in_addr **addr_list = (struct in_addr**)host->h_addr_list;
+	strcpy(ip, inet_ntoa(*addr_list[0]));
+	int i = 0;
+	/*
+	for (i = 0; i < host->h_length; ++i) {
+		printf("ip: %s\n", inet_ntoa(*addr_list[i]));
+	}
+	*/
+	return 0;
 }
 
 void handle_client(int client_fd)
@@ -267,34 +317,33 @@ void handle_client(int client_fd)
 	char buf[MAX_CLIENT_SEND_BUFF_SZ];
 	int retn = 0;
 	irc_init(&irc_channels);
-	irc_channels.socket_fd = create_client_socket(IRC_SERVER_URL, IRC_SERVER_PORT);
+	if (0 != get_ip_from_hostname(IRC_SERVER_URL, buf, sizeof(buf))) {
+		perror("get ip from host error\n");
+		goto err;
+	}
+	printf("ip: %s\n", buf);
+	irc_channels.socket_fd = create_client_socket(buf, IRC_SERVER_PORT);
 	if (0 > irc_channels.socket_fd) {
-		close(client_fd);
-		irc_free(irc_channels);
-		return;
+		goto err;
 	}
 	if (0 != pthread_create(&irc_channels.thread_recv, NULL
 		, thread_recv_msg_from_server, &irc_channels)) {
 		perror("create recv thread error!");
-		close(client_fd);
-		irc_free(irc_channels);
-		return;
+		goto err;
 	}
 	if (0 != pthread_create(&irc_channels.thread_send, NULL
 		, thread_send_msg_to_server, &irc_channels)) {
 		perror("create send thread error!");
-		close(client_fd);
-		irc_free(irc_channels);
-		return;
+		goto err;
 	}
 
 	for(;;) {
 		retn = recv(client_fd, buf, sizeof(buf) - 1, 0);
 		if (retn > 0) {
-			buf[retn] = '\0';
-			fprintf(stdout, "recv: %s\n",buf);
-			handle_msg_remove_illegal_ch(buf, retn + 1);
-			handle_msg_from_client(&irc_channels, buf, retn + 1);
+			buf[retn - 1] = '\0';
+			fprintf(stdout, "[local-client]: recv: %s\n",buf);
+			handle_msg_remove_illegal_ch(buf, retn);
+			handle_msg_from_client(&irc_channels, buf, retn - 1);
 		} else if (0 == retn) {
 			fprintf(stdout, "client offline");
 			break;
@@ -304,8 +353,9 @@ void handle_client(int client_fd)
 		}
 	}
 
+err:
 	close(client_fd);
-	irc_free(irc_channels);
+	irc_free(&irc_channels);
 }
 
 
