@@ -27,26 +27,26 @@ typedef struct node {
 
 typedef struct irc_data {
 	int socket_fd;
-	char **channel_names;
+	// char **channel_names;
 	pthread_t thread_recv;
 	pthread_t thread_send;
 	pthread_mutex_t list_lock;
 	node_t list;
 	char *nickname;
-	int ch_select;
-	int ch_cur_count;
-	int ch_total_count;
+	// int ch_select;
+	// int ch_cur_count;
+	// int ch_total_count;
 } irc_data_t;
 
 
 void irc_init(irc_data_t *data)
 {
 	data->socket_fd = 0;
-	data->channel_names = NULL;
+	// data->channel_names = NULL;
 	data->nickname = NULL;
-	data->ch_select = -1;
-	data->ch_cur_count = 0;
-	data->ch_total_count = 0;
+	// data->ch_select = -1;
+	// data->ch_cur_count = 0;
+	// data->ch_total_count = 0;
 
 	pthread_mutex_init(&data->list_lock, NULL);
 
@@ -74,6 +74,7 @@ void irc_free(irc_data_t *data)
 	pthread_mutex_unlock(&data->list_lock);
 	pthread_mutex_destroy(&data->list_lock);
 
+	/*
 	int i = 0;
 	for (i = 0; i < data->ch_cur_count; ++i) {
 		if (NULL != data->channel_names[i]) {
@@ -82,6 +83,7 @@ void irc_free(irc_data_t *data)
 		}
 	}
 	free(data->channel_names);
+	*/
 
 }
 
@@ -137,9 +139,9 @@ typedef struct custom_command {
 	const char * const cmd_comment;
 } custom_command_t;
 
-static custom_command_t *IRC_COMMAND = {
+const custom_command_t IRC_COMMAND[] = {
 	{ 'n', "name",		"NICK",		1,	"set nickname"},
-	{ 'l', "login",		"USER",		1,	"login"},
+	{ 'l', "login",		"USER",		0,	"login"},
 	{ 'j', "join",		"JOIN",		1,	"join channel"},
 	{ 'L', "leave",		"PART",		1,	"leave channel"},
 	{ 'q', "quit",		"QUIT",		0,	"quit from irc"},
@@ -158,19 +160,21 @@ static custom_command_t *IRC_COMMAND = {
 void print_usage()
 {
 	fprintf(stdout, "Command Usage:\n");
-	custom_command_t *cmd = IRC_COMMAND;
+	const custom_command_t *cmd = IRC_COMMAND;
 	while (cmd) {
 		fprintf(stdout, "cmd: %c, %s \t\t\t%s\n"
 				, cmd->cmd_shortcut ? cmd->cmd_shortcut : ' '
 				, cmd->cmd_name, cmd->cmd_comment);
+		cmd ++;
 	}
 	fprintf(stdout, "\n");
 }
 
 void handle_custom_client_command(irc_data_t *data, char *buf, int len)
 {
+	// printf("handle_custom_client_command\n");
 	if (len < 2) {
-		fprintf(stderr, "error command!\n");
+allUsage:
 		print_usage();
 		return;
 	}
@@ -179,10 +183,10 @@ void handle_custom_client_command(irc_data_t *data, char *buf, int len)
 	char msg_buf[MAX_CLIENT_SEND_BUFF_SZ];
 	int cur = 0;
 	char *p = NULL;
-	custom_command_t *cmd = IRC_COMMAND;
+	const custom_command_t *cmd = IRC_COMMAND;
 	while(NULL != cmd) {
 		p = buf + 1;
-		if (cmd->cmd_shortcut == *p && len >= 3 
+		if (cmd->cmd_shortcut == *p && len >= 2 
 				&& '\0' == *(p + 1)) {
 			p++;
 			break;
@@ -204,10 +208,14 @@ void handle_custom_client_command(irc_data_t *data, char *buf, int len)
 				break;
 			}
 		}
+		cmd ++;
 	}
 	
-	if (!cmd)
-		return;
+	if (!cmd) {
+		printf("cannot match command!\n");
+		goto allUsage;
+	}
+	/*printf("match command: %s\n", cmd->cmd_name);*/
 	int params_count = cmd->cmd_params_count;
 	char *params_p = p;
 	while (params_count) {
@@ -245,7 +253,21 @@ usage:
 		strcpy(nickname, p);
 		nickname[strlen(p)] = '\0';
 		data->nickname = nickname;
-	} else if (0 == strcmp("login", cmd->cmd_name)) {
+	} else if (0 == strcmp("login", cmd->cmd_name)) { 
+		/* need set nickname first */
+		if (NULL == data->nickname) {
+			fprintf(stderr, "error: need set nickname first");
+			return;
+		}
+		if (strlen(cmd->irc_cmd_name) + 4 + 2 + 1
+				+ 2 * strlen(data->nickname) < max_sz) {
+			cur += sprintf(msg_buf + cur, "%s %s * * :%s"
+					, cmd->irc_cmd_name
+					, data->nickname
+					, data->nickname);
+			goto send;
+		}
+
 	}
 
 	if (strlen(cmd->irc_cmd_name) + 1 + strlen(p) < max_sz) {
@@ -255,7 +277,7 @@ usage:
 	{
 		goto usage;
 	}
-
+send:
 	irc_channel_send_msg(data, msg_buf, cur);
 
 }
@@ -266,6 +288,7 @@ usage:
  * */
 void handle_msg_from_client(irc_data_t *data, char *buf, int len)
 {
+	// printf("handle_msg_from_client\n");
 	if (NULL == buf || 0 == len)
 		return;
 	if ('/' != buf[0]) {
@@ -283,8 +306,8 @@ void * thread_send_msg_to_server(void *args)
 	node_t *n = NULL;
 	struct timespec timespan;
 	timespan.tv_sec = 0;
-	timespan.tv_nsec = 1000 * 1000 * 100; /* 100 毫秒*/
-	int timecount = 0; // 超过 1s 不发数据就需要发送 ping 包
+	timespan.tv_nsec = 1000 * 1000 * 100; /* 100 ms*/
+	int timecount = 0; // 
 	const int time_limit = 200;
 	const char * const msg_ping = "PING :ALIVECHECK\r\n";
 
@@ -318,7 +341,7 @@ void * thread_send_msg_to_server(void *args)
 				perror("send fail, send thread exit");
 				break;
 			}
-			printf("[local_client]: send msg success\n");
+			// printf("[local_client]: send msg success\n");
 			timecount = 0;
 		} else if (NULL != n && NULL == n->v) {
 			timecount ++;
@@ -326,7 +349,7 @@ void * thread_send_msg_to_server(void *args)
 		} else {
 			timecount ++;
 		}
-		if (timecount > time_limit) {
+		if (timecount > time_limit && data->nickname) {
 			timecount = 0;
 			irc_channel_send_msg(data, msg_ping, strlen(msg_ping));
 		}
@@ -339,6 +362,133 @@ void * thread_send_msg_to_server(void *args)
 	return data;
 }
 
+char * strnchr(char *buf, int ch, int len)
+{
+	char *p = buf;
+	while (*p && len -- > 0) {
+		if (*p == ch)
+			return p;
+		p++;
+	}
+	if (*p != ch)
+		return NULL;
+	else
+		return p;
+}
+
+char * strnrchr(char *buf, int ch, int len)
+{
+	char *p = buf;
+	char *p_match = NULL;
+	while (*p && len -- > 0) {
+		if (*p == ch)
+			p_match = p;
+		p++;
+	}
+	if (*p != ch) {
+		if (!p_match)
+			return NULL;
+		else
+			return p_match;
+	} else
+		return p;
+}
+
+void handle_msg_from_server(char *buf, int len)
+{
+	char *p = NULL;
+	char *p_head = NULL;
+	int head_sz = 0;
+	char *p_cmd = NULL;
+	int cmd_sz = 0;
+	int cur = 0;
+	if (!buf || 0 >= len)
+		return;
+	if (':' == buf[0]) {
+		p_head = &buf[1];
+		p = strnchr(buf + cur, ' ', len - cur);
+		if (!p) {
+			p_head = NULL;
+			head_sz = 0;
+err:
+			// some time server send package too bigger
+			fprintf(stderr, "error parse\n");
+			write(STDERR_FILENO, buf, len);
+			fprintf(stderr, "\n");
+			return;
+		}
+		*p = '\0';
+		head_sz = p - p_head;
+		cur = p - buf + 1;
+		// keep only nickname
+		p = strnchr(p_head, '!', head_sz);
+		if (p) {
+			*p = '\0';
+		} else {
+			p = strnchr(p_head, '@', head_sz);
+		}
+		if (p)
+			p = '\0';
+
+	}
+	if (cur >= len)
+		return;
+	p_cmd = buf + cur;
+	p = p_cmd;
+	p = strnchr(p_cmd, ' ', len - cur);
+	if (!p) {
+		fprintf(stderr, "parse cmd error\n");
+		goto err;
+	}
+	*p = '\0';
+	cmd_sz = p - p_cmd;
+	cur += cmd_sz + 1;
+
+	int end_sz = 0;
+	p = strnchr(buf + cur, '\r', len - cur);
+	if (p) {
+		*p = '\0';
+		if ('\n' == *(p + 1)) {
+			end_sz = p - buf + 2;
+			*(p + 1) = '\0';
+		} else
+			end_sz = p - buf + 1;
+	}
+			
+	if (0 == strncmp("PRIVMSG", p_cmd, cmd_sz)
+		|| 0 == strncmp("NOTICE", p_cmd, cmd_sz)
+		|| 0 == strncmp("001", p_cmd, cmd_sz)
+		|| 0 == strncmp("JOIN", p_cmd, cmd_sz)
+		|| 0 == strncmp("PART", p_cmd, cmd_sz)) {
+		char *p_channel = NULL;
+		int channel_sz = 0;
+		p_channel = buf + cur;
+		p = strnchr(p_channel, ' ', len - cur);
+		if (!p) {
+			p = strnchr(p_channel, '\0', len - cur);
+		}
+		if (!p) {
+			fprintf(stderr, "parse channel error\n");
+			goto err;
+		}
+		*p = '\0';
+		channel_sz = p - p_channel;
+		cur += channel_sz + 1;
+		fprintf(stdout, "%s [%s]{%s} %s\n", p_cmd, p_channel, p_head
+				, buf + cur);
+		// write(STDOUT_FILENO, buf + cur, len - cur);
+	} else if (0 == strncmp("QUIT", p_cmd, cmd_sz)
+			||0 == strncmp("ERROR", p_cmd, cmd_sz)
+			||0 == strncmp("MODE", p_cmd, cmd_sz)
+			) {
+		fprintf(stdout, "%s %s %s\n", p_head, p_cmd, buf + cur);
+		// write(STDOUT_FILENO, buf + cur, len - cur);
+	}
+	// fprintf(stdout, "\n");
+
+	handle_msg_from_server(buf + end_sz, len - end_sz);
+}
+
 void * thread_recv_msg_from_server(void *args)
 {
 	irc_data_t *data = (irc_data_t *) args;
@@ -346,16 +496,33 @@ void * thread_recv_msg_from_server(void *args)
 	int len = MAX_CLIENT_SEND_BUFF_SZ;
 	char *buf = (char *)mmap(NULL, len, PROT_READ | PROT_WRITE
 		, MAP_PRIVATE | MAP_ANON, -1, len);
+	char *p_end = NULL;
+	int cur = 0;
 	if (NULL == buf) {
 		goto err;
 	}
 	for (;;) {
-		ret = recv(data->socket_fd, buf, len, 0);
+		ret = recv(data->socket_fd, buf + cur, len - cur, 0);
 		if (-1 == ret) {
 			perror("recv error, recv thread exit!");
 			break;
 		}
-		write(STDOUT_FILENO, buf, ret);
+		
+		cur += ret;
+		p_end = strnrchr(buf, '\r', cur);
+		// max net page is smaller than MAX_CLIENT_SEND_BUFF_SZ / 2
+		if (p_end && '\n' == *(p_end + 1)) {
+			ret = p_end - buf;
+			ret += 2;
+		} else {
+			ret = cur;
+		}
+
+		handle_msg_from_server(buf, ret);
+		cur -= ret;
+		if (cur < 0)
+			cur = 0;
+		memcpy(buf, buf + ret, cur);
 	}
 err:
 	if (NULL != buf)
@@ -372,18 +539,18 @@ int create_client_socket(char *ip, short port)
 	server_addr.sin_addr.s_addr = inet_addr(ip);
 	server_addr.sin_port = htons(port);
 	int s_fd = socket(AF_INET, SOCK_STREAM, 0);
-	printf("socket success\n");
+	// printf("socket success\n");
 	if (0 > s_fd) {
 		perror("socket error!\n");
 		return -1;
 	}
-	printf("connect start\n");
+	// printf("connect start\n");
 	if (-1 == connect(s_fd, (struct sockaddr *)&server_addr
 				, sizeof(server_addr))) {
 		perror("connect error");
 		return -2;
 	}
-	fprintf(stdout, "connect to %s\n", ip);
+	// fprintf(stdout, "connect to %s\n", ip);
 	return s_fd;
 }
 int get_ip_from_hostname(char *hostname, char *ip, int ip_len)
@@ -423,7 +590,7 @@ void handle_client(int client_fd, char *ip, short port)
 		perror("get ip from host error\n");
 		goto err;
 	}
-	printf("ip: %s\n", buf);
+	printf("connect to irc server: %s[%s] %d\n", ip, buf, port);
 	irc_channels.socket_fd = create_client_socket(buf, port);
 	if (0 > irc_channels.socket_fd) {
 		goto err;
@@ -496,7 +663,7 @@ int main(int argc, void **args)
 		return -3;
 	}
 
-	printf("unix domain socket start");
+	// printf("unix domain socket start");
 	for(;;) {
 		memset(client_addr.sun_path, 0
 				, sizeof(client_addr.sun_path));
@@ -508,7 +675,7 @@ int main(int argc, void **args)
 			perror(strerror(errno));
 			exit(-4);
 		}
-		printf("client info: path: %s\n", client_addr.sun_path);
+		// printf("client info: path: %s\n", client_addr.sun_path);
 		if (0 == fork()) {
 				handle_client(client_fd, ip, port);
 				exit(0);
