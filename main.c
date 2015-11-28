@@ -15,7 +15,7 @@
 #define SOCK_PATH "IRC_Server"
 #define SOCK_MAX_CLIENT 10
 #define MAX_CLIENT_SEND_BUFF_SZ 4096
-#define IRC_SERVER_URL "weber.freenode.net"
+#define IRC_SERVER_URL "adams.freenode.net"
 #define IRC_SERVER_PORT 6667
 #define MIN(x, y) (x) > (y) ? (y) : (x)
 #define MAX(x, y) (x) > (y) ? (x) : (y)
@@ -413,18 +413,18 @@ int get_ip_from_hostname(char *hostname, char *ip, int ip_len)
 	return 0;
 }
 
-void handle_client(int client_fd)
+void handle_client(int client_fd, char *ip, short port)
 {
 	irc_data_t irc_channels;
 	char buf[MAX_CLIENT_SEND_BUFF_SZ];
 	int retn = 0;
 	irc_init(&irc_channels);
-	if (0 != get_ip_from_hostname(IRC_SERVER_URL, buf, sizeof(buf))) {
+	if (0 != get_ip_from_hostname(ip, buf, sizeof(buf))) {
 		perror("get ip from host error\n");
 		goto err;
 	}
 	printf("ip: %s\n", buf);
-	irc_channels.socket_fd = create_client_socket(buf, IRC_SERVER_PORT);
+	irc_channels.socket_fd = create_client_socket(buf, port);
 	if (0 > irc_channels.socket_fd) {
 		goto err;
 	}
@@ -463,8 +463,14 @@ err:
 
 
 
-int main(void)
+int main(int argc, void **args)
 {
+	short port = IRC_SERVER_PORT;
+	char *ip = IRC_SERVER_URL;
+	if (argc >= 2)
+		ip = (char *)args[1];
+	if (argc >= 3)
+		port = (short)*(int *)args[2];
 	int socket_fd, client_fd;
 	struct sockaddr_un local_addr, client_addr;
 	if ((socket_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {
@@ -504,7 +510,7 @@ int main(void)
 		}
 		printf("client info: path: %s\n", client_addr.sun_path);
 		if (0 == fork()) {
-				handle_client(client_fd);
+				handle_client(client_fd, ip, port);
 				exit(0);
 		}
 	}
