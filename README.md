@@ -1,8 +1,9 @@
 ### DESC
 - this is a simple irc client for command line user
 - can send msg fit the role of irc or use shortcut to effective
+
     | shortcut | desc |
-    | - | - |
+    |:-:|:-:|
     | n | set nickname: /n mynickname} |
     | l | login(need set nickname first): /l} |
     | j | join channel: /j #ubuntu} |
