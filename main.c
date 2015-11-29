@@ -1,3 +1,9 @@
+/*
+ * author: mardyu<michealyxd@hotmail.com>
+ * create date: 11/28/2015
+ * desc: a simple irc-client for command line
+ */
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <arpa/inet.h>
@@ -140,18 +146,18 @@ typedef struct custom_command {
 } custom_command_t;
 
 const custom_command_t IRC_COMMAND[] = {
-	{ 'n', "name",		"NICK",		1,	"set nickname"},
-	{ 'l', "login",		"USER",		0,	"login"},
-	{ 'j', "join",		"JOIN",		1,	"join channel"},
-	{ 'L', "leave",		"PART",		1,	"leave channel"},
-	{ 'q', "quit",		"QUIT",		0,	"quit from irc"},
-	{ 'N', "namelist",	"NAMES",	0,	"list name from channel"},
-	{ 'c', "channel",	"LIST",		0,	"list channel or topic"},
-	{ 'i', "invite",	"INVITE",	2,	"invite other to channel"}, 
-	{ 'k', "kickout",	"KICK",		2,	"kick other out of channel"},
-	{ 'm', "message",	"PRIVMSG",	1,	"send msg in cur channel"},
+	{ 'n', "name",		"NICK",		1,	"set nickname: /n mynickname"},
+	{ 'l', "login",		"USER",		0,	"login(need set nickname first): /l"},
+	{ 'j', "join",		"JOIN",		1,	"join channel: /j #ubuntu"},
+	{ 'L', "leave",		"PART",		1,	"leave channel: /L"},
+	{ 'q', "quit",		"QUIT",		0,	"quit from irc: /q"},
+	{ 'N', "namelist",	"NAMES",	0,	"list name from channel: /N"},
+	{ 'c', "channel",	"LIST",		0,	"list channel or topic: /c"},
+	{ 'i', "invite",	"INVITE",	2,	"invite other to channel: /i other-nickname"}, 
+	{ 'k', "kickout",	"KICK",		2,	"kick other out of channel: /k other-nickname"},
+	{ 'm', "message",	"PRIVMSG",	1,	"send msg in cur channel: /m helloworld"},
 	{ 'M', "custom-msg",	"PRIVMSG",	2,	"send msg to other channel"},
-	{ 'p', "person-talk",	"PRIVMSG",	2,	"talk to other user"},
+	{ 'p', "person-talk",	"PRIVMSG",	2,	"talk to other user: /p other-nickname hi?"},
 	{ 'w', "who",		"WHO",		0,	"search user"},
 	{ 'W', "whois",		"WHOIS",	1,	"search user info"},
 	NULL
@@ -636,8 +642,10 @@ int main(int argc, void **args)
 	char *ip = IRC_SERVER_URL;
 	if (argc >= 2)
 		ip = (char *)args[1];
-	if (argc >= 3)
-		port = (short)*(int *)args[2];
+	if (argc >= 3) {
+		// port = (short)*(int *)args[2];
+		port = (short) atoi((char *)args[2]);
+	}
 	int socket_fd, client_fd;
 	struct sockaddr_un local_addr, client_addr;
 	if ((socket_fd = socket(AF_UNIX, SOCK_STREAM, 0)) == -1) {

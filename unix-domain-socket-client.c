@@ -1,4 +1,8 @@
-
+/*
+ * author: mardyu<michealyxd@hotmail.com>
+ * create date: 11/28/2015
+ * desc: a simple unix domain socket client, (use ncat instead, if you want)
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
