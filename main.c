@@ -464,8 +464,9 @@ err:
 	if (0 == strncmp("PRIVMSG", p_cmd, cmd_sz)
 		|| 0 == strncmp("NOTICE", p_cmd, cmd_sz)
 		|| 0 == strncmp("001", p_cmd, cmd_sz)
-		|| 0 == strncmp("JOIN", p_cmd, cmd_sz)
-		|| 0 == strncmp("PART", p_cmd, cmd_sz)) {
+		/*|| 0 == strncmp("JOIN", p_cmd, cmd_sz)*/
+		/*|| 0 == strncmp("PART", p_cmd, cmd_sz)*/
+		) {
 		char *p_channel = NULL;
 		int channel_sz = 0;
 		p_channel = buf + cur;
@@ -483,9 +484,11 @@ err:
 		fprintf(stdout, "%s [%s]{%s} %s\n", p_cmd, p_channel, p_head
 				, buf + cur);
 		// write(STDOUT_FILENO, buf + cur, len - cur);
-	} else if (0 == strncmp("QUIT", p_cmd, cmd_sz)
-			||0 == strncmp("ERROR", p_cmd, cmd_sz)
+	} else if (
+			/*0 == strncmp("QUIT", p_cmd, cmd_sz)*/
+			0 == strncmp("ERROR", p_cmd, cmd_sz)
 			||0 == strncmp("MODE", p_cmd, cmd_sz)
+			||0 == strncmp("332", p_cmd, cmd_sz)
 			) {
 		fprintf(stdout, "%s %s %s\n", p_head, p_cmd, buf + cur);
 		// write(STDOUT_FILENO, buf + cur, len - cur);
@@ -685,9 +688,11 @@ int main(int argc, void **args)
 		}
 		// printf("client info: path: %s\n", client_addr.sun_path);
 		if (0 == fork()) {
-				handle_client(client_fd, ip, port);
-				exit(0);
+			close(socket_fd);
+			handle_client(client_fd, ip, port);
+			exit(0);
 		}
+		close(client_fd);
 	}
 	close(socket_fd);
 
